@@ -4,23 +4,55 @@ Trabalho de Programação Orientada a Objetos (POO) em Java. O sistema automatiz
 agendamento de consultas, o cadastro de médicos, especialidades e pacientes, o cálculo
 do valor das consultas (de acordo com a especialidade e o tipo de paciente), o
 histórico clínico com prescrições eletrônicas, o registro de pagamentos e o relatório
-de faturamento por tipo de paciente.
+de faturamento por tipo de paciente. Os dados são salvos em arquivos CSV.
 
 ## Como executar
 
-Requisitos: **JDK 17+** e **Maven 3.8+**.
+### Dependências e versões
+
+| Ferramenta | Versão | Observação |
+|---|---|---|
+| JDK | 17 ou superior | testado com OpenJDK 21 |
+| Maven | 3.8 ou superior | testado com Maven 3.9 |
+| JUnit | 5.10 | baixado automaticamente pelo Maven; usado só nos testes |
+
+O sistema não usa nenhuma biblioteca externa em tempo de execução, nem credenciais ou
+chaves de API (por isso não há `.env.example`).
+
+### Passo a passo
+
+1. Clone o repositório e entre na pasta:
+
+   ```bash
+   git clone https://github.com/rodriguesarrais/trabalho-poo.git
+   ```
+
+   ```bash
+   cd trabalho-poo
+   ```
+
+2. Compile, rode os testes e gere o `.jar`:
+
+   ```bash
+   mvn package
+   ```
+
+3. Execute:
+
+   ```bash
+   java -jar target/clinica.jar
+   ```
+
+Os dados ficam na pasta `dados/` do diretório atual. Para usar outra pasta, informe-a
+como argumento:
 
 ```bash
-mvn package
+java -jar target/clinica.jar /caminho/para/minha-pasta
 ```
 
-```bash
-java -jar target/clinica.jar
-```
-
-Ao iniciar, o sistema pergunta se deve carregar **dados de exemplo** (4 especialidades,
-5 médicos com horários, 4 pacientes e algumas consultas futuras), o que facilita a
-demonstração.
+Na primeira execução (pasta vazia), o sistema oferece carregar **dados de exemplo**
+(4 especialidades, 5 médicos com horários, 4 pacientes e algumas consultas futuras),
+o que facilita a demonstração.
 
 Para rodar apenas os testes automatizados:
 
@@ -50,6 +82,32 @@ mkdir -p out && javac -d out $(find src/main/java -name "*.java") && java -cp ou
 | Registro de pagamento de cada consulta | `FaturamentoService#registrarPagamento`, `Pagamento` |
 | Relatório de faturamento por tipo de paciente | `FaturamentoService#gerarRelatorio`, `RelatorioFaturamento` |
 
+### Requisitos não funcionais do trabalho
+
+| Diretriz | Como foi atendida |
+|---|---|
+| Persistência por arquivos (CSV/JSON/TXT) | `ArmazenamentoCsv`: um arquivo CSV por entidade, gravado automaticamente após cada operação |
+| Não quebrar em entradas inválidas | `Entrada` repete a pergunta até receber número, data, hora ou valor válido; erros de regra de negócio são exibidos e o menu continua |
+| Não quebrar com arquivos ausentes | Pasta ou arquivos ausentes são tratados como base vazia |
+| Arquivos corrompidos | Mensagem com arquivo, linha e coluna do problema; o usuário pode mover os arquivos para uma pasta `backup-<data>` e iniciar vazio, ou sair sem alterar nada |
+| Falha ao gravar | A gravação usa arquivo temporário e troca atômica (sem arquivos pela metade); uma falha é avisada sem encerrar o sistema |
+| Interface | Console com menus numerados |
+| README com instruções | Este arquivo |
+
+### Funcionalidades adicionais
+
+- **Edição e remoção** de especialidades, médicos e pacientes. A remoção é bloqueada quando
+  apagaria o histórico: um médico ou paciente com consultas, ou uma especialidade com
+  médicos associados.
+- **Exportação** do relatório de faturamento para arquivo TXT (`dados/relatorios/`), com
+  filtro opcional por período.
+- **Agendamento por especialidade**, que escolhe automaticamente um médico livre.
+- **Consulta de horários livres** por médico ou por especialidade, e de encaixes restantes no dia.
+- **Pagamentos pendentes**: lista consultas realizadas, ou canceladas com taxa, ainda não pagas.
+- **Validação de CPF** (11 dígitos, com ou sem pontuação) e de CPF ou CRM duplicados.
+- **Dados de exemplo** para demonstração.
+- **Testes automatizados** (JUnit 5) das regras de negócio e da persistência.
+
 ## Regras de negócio e decisões de projeto
 
 - **Duração e grade:** toda consulta dura 30 minutos. Os horários de uma consulta normal
@@ -72,7 +130,9 @@ mkdir -p out && javac -d out $(find src/main/java -name "*.java") && java -cp ou
   ou para um intervalo de datas.
 - **Valores monetários** usam `BigDecimal` com duas casas decimais, evitando erros de
   arredondamento de `double`.
-- **Persistência** em memória (os dados existem enquanto o programa está em execução).
+- **Persistência:** ao carregar os arquivos, as entidades são reconstruídas pelos próprios
+  métodos do domínio (`Consulta.cancelar`, `registrarRealizacao`, `registrarPagamento` etc.).
+  Assim, dados inconsistentes no disco são rejeitados pelas mesmas regras usadas na interface.
 
 ## Conceitos de POO aplicados
 
@@ -86,6 +146,8 @@ mkdir -p out && javac -d out $(find src/main/java -name "*.java") && java -cp ou
   tipo concreto do paciente.
 - **Interfaces e generics:** `Repositorio<T extends Identificavel>`, com a implementação
   `RepositorioEmMemoria<T>`; os serviços dependem da interface, não da implementação.
+  Da mesma forma, a interface de console depende de `Armazenamento`, e não de
+  `ArmazenamentoCsv`: trocar CSV por JSON ou banco de dados não exige mudar o restante.
 - **Composição e associação:** `Medico` tem uma `Especialidade` e uma agenda de
   `HorarioAtendimento`; `Consulta` agrega `Prescricao` e `Pagamento`.
 - **Enums com comportamento**, `record`s imutáveis (`HorarioAtendimento`, `ItemPrescricao`,
@@ -101,14 +163,29 @@ src/main/java/br/com/bemestar/clinica
 ├── Main.java                 ponto de entrada
 ├── Clinica.java              monta repositórios e serviços
 ├── modelo/                   entidades e regras do domínio
-├── repositorio/              Repositorio<T> e RepositorioEmMemoria<T>
+├── repositorio/              Repositorio<T>, RepositorioEmMemoria<T> e BaseDeDados
+├── persistencia/             Armazenamento, ArmazenamentoCsv e leitura/escrita de CSV
 ├── servico/                  CadastroService, AgendaService, ProntuarioService,
 │                             FaturamentoService, PoliticaPrecos, HistoricoPaciente
-├── relatorio/                RelatorioFaturamento
+├── relatorio/                RelatorioFaturamento e ExportadorRelatorio (TXT)
 ├── excecao/                  exceções do domínio
 └── console/                  interface de texto (menus), leitura de dados, dados de exemplo
-src/test/java/...             testes JUnit 5 das regras de negócio
+src/test/java/...             testes JUnit 5 das regras de negócio e da persistência
 ```
+
+### Arquivos de dados
+
+| Arquivo | Conteúdo |
+|---|---|
+| `especialidades.csv` | id, nome, valor base |
+| `medicos.csv` | id, nome, CPF, telefone, CRM, id da especialidade |
+| `horarios.csv` | id do médico, dia da semana, início, fim |
+| `pacientes.csv` | id, tipo (PARTICULAR/CONVENIO/VIP), nome, CPF, telefone, operadora, carteirinha |
+| `consultas.csv` | id, paciente, médico, início, tipo, valor, status, diagnóstico, observações, dados do cancelamento |
+| `prescricoes.csv` e `itens_prescricao.csv` | prescrições e seus medicamentos |
+| `pagamentos.csv` | id, consulta, valor, forma, data |
+
+Os arquivos usam `;` como separador e UTF-8, e podem ser abertos no Excel ou no LibreOffice.
 
 ## Diagrama de classes (simplificado)
 
