@@ -14,11 +14,17 @@ import br.com.bemestar.clinica.modelo.Pagamento;
 import br.com.bemestar.clinica.modelo.Prescricao;
 import br.com.bemestar.clinica.modelo.StatusConsulta;
 import br.com.bemestar.clinica.modelo.TipoPaciente;
+import br.com.bemestar.clinica.persistencia.Armazenamento;
+import br.com.bemestar.clinica.persistencia.PersistenciaException;
+import br.com.bemestar.clinica.relatorio.ExportadorRelatorio;
+import br.com.bemestar.clinica.repositorio.BaseDeDados;
 import br.com.bemestar.clinica.servico.AgendaService;
 import br.com.bemestar.clinica.servico.HistoricoPaciente;
 
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.nio.file.Path;
+import java.time.Clock;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -31,6 +37,10 @@ import java.util.stream.Collectors;
 
 /**
  * Interface de console (menus de texto) do sistema da clinica.
+ *
+ * <p>Carrega os dados ao iniciar e grava automaticamente apos cada operacao
+ * concluida com sucesso. Entradas invalidas sao pedidas novamente e erros de
+ * regra de negocio ou de arquivo sao exibidos sem interromper o programa.</p>
  */
 public class ConsoleApp {
 
@@ -38,12 +48,18 @@ public class ConsoleApp {
     private record Opcao(String descricao, Runnable acao) {
     }
 
-    private final Clinica clinica;
+    private final Armazenamento armazenamento;
+    private final ExportadorRelatorio exportador;
+    private final Clock relogio;
     private final Entrada entrada;
     private final PrintStream saida;
+    private Clinica clinica;
 
-    public ConsoleApp(Clinica clinica, InputStream in, PrintStream out) {
-        this.clinica = clinica;
+    public ConsoleApp(Armazenamento armazenamento, Path pastaRelatorios, Clock relogio,
+                      InputStream in, PrintStream out) {
+        this.armazenamento = armazenamento;
+        this.exportador = new ExportadorRelatorio(pastaRelatorios);
+        this.relogio = relogio;
         this.entrada = new Entrada(in, out);
         this.saida = out;
     }
@@ -53,8 +69,15 @@ public class ConsoleApp {
         saida.println("   CLINICA BEM ESTAR - Sistema de Gestao");
         saida.println("==============================================");
         try {
-            if (entrada.confirmar("Deseja carregar dados de exemplo?")) {
+            BaseDeDados base = carregarBase();
+            if (base == null) {
+                saida.println("Sistema encerrado sem alterar os arquivos de dados.");
+                return;
+            }
+            clinica = new Clinica(relogio, base);
+            if (base.estaVazia() && entrada.confirmar("Nenhum dado cadastrado. Deseja carregar dados de exemplo?")) {
                 DadosExemplo.carregar(clinica);
+                salvar();
                 saida.println("Dados de exemplo carregados.");
             }
             menu("MENU PRINCIPAL", "Sair", List.of(
@@ -68,6 +91,43 @@ public class ConsoleApp {
             saida.println();
         }
         saida.println("Ate logo!");
+    }
+
+    /**
+     * Carrega os dados do disco. Se os arquivos estiverem corrompidos, oferece
+     * mover os arquivos para backup e iniciar com base vazia; retorna null se o
+     * usuario preferir sair para corrigir os arquivos manualmente.
+     */
+    private BaseDeDados carregarBase() {
+        saida.println("Pasta de dados: " + armazenamento.local());
+        try {
+            BaseDeDados base = armazenamento.carregar();
+            saida.printf("Dados carregados: %d especialidade(s), %d medico(s), %d paciente(s), %d consulta(s).%n",
+                    base.especialidades().listarTodos().size(), base.medicos().listarTodos().size(),
+                    base.pacientes().listarTodos().size(), base.consultas().listarTodos().size());
+            return base;
+        } catch (PersistenciaException e) {
+            saida.println("ERRO ao carregar os dados: " + e.getMessage());
+            if (!entrada.confirmar("Mover os arquivos atuais para backup e iniciar com a base vazia?")) {
+                return null;
+            }
+            try {
+                saida.println("Arquivos preservados em: " + armazenamento.arquivarDadosAtuais());
+            } catch (PersistenciaException falhaBackup) {
+                saida.println("AVISO: " + falhaBackup.getMessage());
+                return null;
+            }
+            return new BaseDeDados();
+        }
+    }
+
+    /** Grava a base; uma falha de gravacao e avisada mas nao interrompe o sistema. */
+    private void salvar() {
+        try {
+            armazenamento.salvar(clinica.base());
+        } catch (PersistenciaException e) {
+            saida.println("AVISO: os dados nao foram salvos. " + e.getMessage());
+        }
     }
 
     /** Laco generico de menu: exibe as opcoes, le a escolha e trata erros de negocio. */
@@ -85,8 +145,14 @@ public class ConsoleApp {
             }
             try {
                 opcoes.get(escolha - 1).acao().run();
+                salvar();
             } catch (ClinicaException e) {
                 saida.println("ERRO: " + e.getMessage());
+            } catch (EntradaEncerradaException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                // Protecao final: um erro inesperado nao derruba o sistema.
+                saida.println("ERRO inesperado: " + e + ". A operacao foi cancelada.");
             }
         }
     }
@@ -101,7 +167,18 @@ public class ConsoleApp {
         submenu("ESPECIALIDADES", List.of(
                 new Opcao("Cadastrar especialidade", this::cadastrarEspecialidade),
                 new Opcao("Listar especialidades", this::listarEspecialidades),
-                new Opcao("Atualizar valor base", this::atualizarValorBase)));
+                new Opcao("Atualizar valor base", this::atualizarValorBase),
+                new Opcao("Remover especialidade", this::removerEspecialidade)));
+    }
+
+    private void removerEspecialidade() {
+        listarEspecialidades();
+        long id = entrada.id("Id da especialidade");
+        Especialidade especialidade = clinica.cadastro().buscarEspecialidade(id);
+        if (entrada.confirmar("Remover " + especialidade.getNome() + "?")) {
+            clinica.cadastro().removerEspecialidade(id);
+            saida.println("Especialidade removida.");
+        }
     }
 
     private void cadastrarEspecialidade() {
@@ -129,7 +206,37 @@ public class ConsoleApp {
                 new Opcao("Listar medicos e horarios", this::listarMedicos),
                 new Opcao("Definir horario de atendimento", this::definirHorario),
                 new Opcao("Remover horario de atendimento", this::removerHorario),
-                new Opcao("Listar medicos por especialidade", this::listarMedicosPorEspecialidade)));
+                new Opcao("Listar medicos por especialidade", this::listarMedicosPorEspecialidade),
+                new Opcao("Editar dados do medico", this::editarMedico),
+                new Opcao("Alterar especialidade do medico", this::alterarEspecialidadeMedico),
+                new Opcao("Remover medico", this::removerMedico)));
+    }
+
+    private void editarMedico() {
+        listarMedicos();
+        long id = entrada.id("Id do medico");
+        saida.println("Deixe em branco para manter o valor atual.");
+        String nome = entrada.textoOpcional("Novo nome");
+        String telefone = entrada.textoOpcional("Novo telefone");
+        saida.println("Atualizado: " + clinica.cadastro().atualizarDadosMedico(id, nome, telefone));
+    }
+
+    private void alterarEspecialidadeMedico() {
+        listarMedicos();
+        long medicoId = entrada.id("Id do medico");
+        listarEspecialidades();
+        long especialidadeId = entrada.id("Id da nova especialidade");
+        saida.println("Atualizado: " + clinica.cadastro().alterarEspecialidadeMedico(medicoId, especialidadeId));
+    }
+
+    private void removerMedico() {
+        listarMedicos();
+        long id = entrada.id("Id do medico");
+        Medico medico = clinica.cadastro().buscarMedico(id);
+        if (entrada.confirmar("Remover Dr(a). " + medico.getNome() + "?")) {
+            clinica.cadastro().removerMedico(id);
+            saida.println("Medico removido.");
+        }
     }
 
     private void cadastrarMedico() {
@@ -199,7 +306,26 @@ public class ConsoleApp {
     private void menuPacientes() {
         submenu("PACIENTES", List.of(
                 new Opcao("Cadastrar paciente", this::cadastrarPaciente),
-                new Opcao("Listar pacientes", this::listarPacientes)));
+                new Opcao("Listar pacientes", this::listarPacientes),
+                new Opcao("Editar dados do paciente", this::editarPaciente),
+                new Opcao("Remover paciente", this::removerPaciente)));
+    }
+
+    private void editarPaciente() {
+        long id = escolherPaciente();
+        saida.println("Deixe em branco para manter o valor atual.");
+        String nome = entrada.textoOpcional("Novo nome");
+        String telefone = entrada.textoOpcional("Novo telefone");
+        saida.println("Atualizado: " + clinica.cadastro().atualizarDadosPaciente(id, nome, telefone));
+    }
+
+    private void removerPaciente() {
+        long id = escolherPaciente();
+        Paciente paciente = clinica.cadastro().buscarPaciente(id);
+        if (entrada.confirmar("Remover " + paciente.getNome() + "?")) {
+            clinica.cadastro().removerPaciente(id);
+            saida.println("Paciente removido.");
+        }
     }
 
     private void cadastrarPaciente() {
@@ -391,7 +517,17 @@ public class ConsoleApp {
                 new Opcao("Listar pagamentos pendentes", this::listarPendentes),
                 new Opcao("Relatorio de faturamento (todo o periodo)",
                         () -> saida.print(clinica.faturamento().gerarRelatorio().formatar())),
-                new Opcao("Relatorio de faturamento por periodo", this::relatorioPorPeriodo)));
+                new Opcao("Relatorio de faturamento por periodo", this::relatorioPorPeriodo),
+                new Opcao("Exportar relatorio de faturamento (TXT)", this::exportarRelatorio)));
+    }
+
+    private void exportarRelatorio() {
+        boolean porPeriodo = entrada.confirmar("Filtrar por periodo?");
+        var relatorio = porPeriodo
+                ? clinica.faturamento().gerarRelatorio(entrada.data("Data inicial"), entrada.data("Data final"))
+                : clinica.faturamento().gerarRelatorio();
+        Path arquivo = exportador.exportar(relatorio, LocalDateTime.now(relogio));
+        saida.println("Relatorio exportado para: " + arquivo);
     }
 
     private void registrarPagamento() {
