@@ -22,4 +22,11 @@ public interface Repositorio<T extends Identificavel> {
     List<T> listarTodos();
 
     List<T> filtrar(Predicate<? super T> criterio);
+
+    /** Remove a entidade; retorna false se o id nao existir. */
+    boolean remover(long id);
+
+    default boolean estaVazio() {
+        return listarTodos().isEmpty();
+    }
 }

@@ -11,6 +11,7 @@ import java.util.function.Predicate;
 
 /**
  * Implementacao do repositorio em memoria, preservando a ordem de cadastro.
+ * Os dados sao gravados em disco pela camada de persistencia.
  */
 public class RepositorioEmMemoria<T extends Identificavel> implements Repositorio<T> {
 
@@ -25,6 +26,8 @@ public class RepositorioEmMemoria<T extends Identificavel> implements Repositori
     @Override
     public T salvar(T entidade) {
         dados.put(entidade.getId(), entidade);
+        // Garante que ids carregados de arquivo nao sejam reutilizados.
+        sequencia.accumulateAndGet(entidade.getId(), Math::max);
         return entidade;
     }
 
@@ -41,5 +44,10 @@ public class RepositorioEmMemoria<T extends Identificavel> implements Repositori
     @Override
     public List<T> filtrar(Predicate<? super T> criterio) {
         return dados.values().stream().filter(criterio).toList();
+    }
+
+    @Override
+    public boolean remover(long id) {
+        return dados.remove(id) != null;
     }
 }

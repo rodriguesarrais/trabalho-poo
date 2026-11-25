@@ -6,7 +6,7 @@ package br.com.bemestar.clinica.modelo;
 public abstract class Pessoa implements Identificavel {
 
     private final long id;
-    private final String nome;
+    private String nome;
     private final String cpf;
     private String telefone;
 
@@ -24,6 +24,10 @@ public abstract class Pessoa implements Identificavel {
 
     public String getNome() {
         return nome;
+    }
+
+    public void setNome(String nome) {
+        this.nome = Validacao.naoVazio(nome, "Nome");
     }
 
     public String getCpf() {
