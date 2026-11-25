@@ -6,6 +6,7 @@ import br.com.bemestar.clinica.modelo.Consulta;
 import br.com.bemestar.clinica.modelo.FormaPagamento;
 import br.com.bemestar.clinica.modelo.Pagamento;
 import br.com.bemestar.clinica.modelo.StatusConsulta;
+import br.com.bemestar.clinica.modelo.TipoPaciente;
 import br.com.bemestar.clinica.relatorio.RelatorioFaturamento;
 import br.com.bemestar.clinica.repositorio.Repositorio;
 
@@ -46,6 +47,9 @@ public class FaturamentoService {
         if (consulta.getValorCobravel().signum() == 0) {
             throw new RegraNegocioException("A consulta #" + consultaId
                     + " foi cancelada sem taxa; nao ha valor a cobrar.");
+        }
+        if (forma == FormaPagamento.CONVENIO && consulta.getPaciente().getTipo() != TipoPaciente.CONVENIO) {
+            throw new RegraNegocioException("Apenas pacientes de convenio podem ter a consulta faturada ao convenio.");
         }
         Pagamento pagamento = new Pagamento(pagamentos.proximoId(), consulta, consulta.getValorCobravel(),
                 forma, LocalDateTime.now(relogio));

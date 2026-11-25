@@ -53,6 +53,17 @@ class FaturamentoServiceTest {
     }
 
     @Test
+    void faturamentoAoConvenioSoParaPacienteDeConvenio() {
+        Consulta particular = realizada(c.particular.getId(), c.ana.getId(), em(TERCA, 10, 0));
+        Consulta convenio = realizada(c.convenio.getId(), c.ana.getId(), em(TERCA, 11, 0));
+
+        assertThrows(RegraNegocioException.class,
+                () -> c.clinica.faturamento().registrarPagamento(particular.getId(), FormaPagamento.CONVENIO));
+        c.clinica.faturamento().registrarPagamento(convenio.getId(), FormaPagamento.CONVENIO);
+        assertTrue(convenio.estaPaga());
+    }
+
+    @Test
     void cancelamentoComTaxaGeraCobrancaESemTaxaNao() {
         Consulta comTaxa = c.agenda().agendar(c.particular.getId(), c.ana.getId(), em(SEGUNDA, 11, 0));
         Consulta semTaxa = c.agenda().agendar(c.vip.getId(), c.ana.getId(), em(QUARTA, 10, 0));
